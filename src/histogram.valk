@@ -95,7 +95,7 @@ global histogram_cache: HashMap[uint, shared Histogram] (.{})
         let n: u64 = 0
         each this.counts as count, i {
             n += count
-            let le = i < bounds.length ? float_text(bounds[i]) : "+Inf"
+            let le = i < bounds.length ? desc.bound_texts[i] : "+Inf"
             write_sample(out, desc.name, "_bucket", desc, this.labels, "le", le, n.to(f64))
         }
         write_sample(out, desc.name, "_sum", desc, this.labels, "", "", this.total)

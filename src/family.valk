@@ -8,6 +8,8 @@ class Desc {
     id: uint (atomic(next_desc_id + 1))
     // Histograms: the upper bounds, without +Inf
     bounds: Array[f64] (.{})
+    // The `le` label values of the bounds
+    bound_texts: Array[String] (.{})
 }
 
 // The labeled series of one metric, by the hash of their label values

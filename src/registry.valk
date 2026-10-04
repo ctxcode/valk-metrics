@@ -50,6 +50,7 @@ class RegistryData {
     + fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) shared Histogram {
         let d = make_desc(name, help, "histogram", labels)
         d.bounds = check_buckets(name, buckets ?? DEFAULT_BUCKETS)
+        each d.bounds as b : d.bound_texts.append(float_text(b))
         let count = d.bounds.length + 1
         let desc: shared Desc = d
         let h: shared Histogram = Histogram {
