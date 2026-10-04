@@ -1,0 +1,38 @@
+use metrics
+use valk.http
+use valk.time
+
+shared jobs: shared metrics.Counter (metrics.counter("app_jobs_total", "Jobs handled, by queue.", .{ "queue" }))
+shared queued: shared metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
+shared job_seconds: shared metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job.", buckets: metrics.exponential_buckets(0.001, 4, 6)))
+
+fn handler(req: http.Request) http.Response {
+    let start = time.mono_ns()
+    queued.inc()
+    jobs.with(.{ req.path == "/mail" ? "mail" : "other" }).inc()
+    queued.dec()
+    job_seconds.observe_since(start)
+    return http.Response.text("done")
+}
+
+fn main() {
+    metrics.add_process_metrics()
+    metrics.add_gc_metrics()
+    metrics.gauge_fn("app_info", "Build information.", fn() f64 { return 1 })
+
+    let server = http.Server.new("127.0.0.1", 19790, handler)
+    // Counts and times every request, and serves GET /metrics
+    server.add_middleware(metrics.middleware())
+    let running = co server.start(2)
+    time.sleep_ms(20)
+
+    http.get("http://127.0.0.1:19790/mail") !!
+    http.get("http://127.0.0.1:19790/mail") !!
+    http.post("http://127.0.0.1:19790/report", "") !!
+
+    let res = http.get("http://127.0.0.1:19790/metrics") !!
+    print(res.body)
+
+    server.shutdown()
+    await running !!
+}

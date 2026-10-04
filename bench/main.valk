@@ -1,0 +1,37 @@
+use metrics
+use valk.thread
+use valk.time
+
+value N (20_000_000)
+
+// Time per call on each thread, and calls per second of all threads together
+fn report(name: String, threads: uint, start: uint) {
+    let ns = (time.mono_ns() - start).to(f64)
+    println(name + " threads=" + threads + ": " + (ns / N.to(f64)).to_string(1) + " ns/call, " + (N.to(f64) * threads.to(f64) * 1000 / ns).to_string(0) + "M calls/s")
+}
+
+fn run(name: String, threads: uint, work: shared fn()()) {
+    let start = time.mono_ns()
+    let list = Array[thread.Thread[void]].new()
+    each 0..threads as i : list.append(thread.start(work) !!)
+    each list as t : t.await()
+    report(name, threads, start)
+}
+
+fn main() {
+    let r = metrics.Registry.new()
+    let c = r.counter("c_total", "C.")
+    let g = r.gauge("g", "G.")
+    let h = r.histogram("h_seconds", "H.")
+    let l = r.counter("l_total", "L.", .{ "method", "status" })
+    let lh = r.histogram("lh_seconds", "LH.", .{ "method", "status" })
+    each Array[uint]{ 1, 4, 8 } as threads {
+        run("counter.inc()", threads, fn() { each 0..N as i : c.inc() })
+        run("counter.add(0.5)", threads, fn() { each 0..N as i : c.add(0.5) })
+        run("gauge.add(1)", threads, fn() { each 0..N as i : g.add(1) })
+        run("histogram.observe()", threads, fn() { each 0..N as i : h.observe(0.07) })
+        run("with(GET,200).inc()", threads, fn() { each 0..N as i : l.with(.{ "GET", "200" }).inc() })
+        run("with(GET,200).observe()", threads, fn() { each 0..N as i : lh.with(.{ "GET", "200" }).observe(0.07) })
+    }
+    println(c.value())
+}

@@ -1,0 +1,130 @@
+use valk.fs
+use valk.gc
+use valk.time
+
+value PROCESS_NAMES (.{
+    "process_cpu_seconds_total"
+    "process_start_time_seconds"
+    "process_resident_memory_bytes"
+    "process_virtual_memory_bytes"
+    "process_open_fds"
+    "process_max_fds"
+})
+
+// Where /proc cannot tell: about when the program started
+shared program_start_seconds: f64 (time.unix_ns().to(f64) / 1e9)
+
+// Linux reports clock ticks in /proc in USER_HZ, which is 100 on every architecture
+value TICKS (100.0)
+
+class ProcessMetrics is Collector {
+    fn write_text(out: ByteBuffer) {
+        #if OS == "linux"
+        let fields = stat_fields(fs.read("/proc/self/stat") !? "")
+        if fields.length > 19 {
+            let cpu = (fields[11].to_uint() !? 0) + (fields[12].to_uint() !? 0)
+            write_help_type(out, "process_cpu_seconds_total", "Total user and system CPU time spent in seconds.", "counter")
+            write_plain(out, "process_cpu_seconds_total", cpu.to(f64) / TICKS)
+            let boot = boot_time()
+            if boot > 0 {
+                let start = fields[19].to_uint() !? 0
+                write_help_type(out, "process_start_time_seconds", "Start time of the process since unix epoch in seconds.", "gauge")
+                write_plain(out, "process_start_time_seconds", boot + start.to(f64) / TICKS)
+            }
+        }
+        let status = fs.read("/proc/self/status") !? ""
+        let vm = status_kb(status, "VmSize:")
+        if vm >= 0 {
+            write_help_type(out, "process_virtual_memory_bytes", "Virtual memory size in bytes.", "gauge")
+            write_plain(out, "process_virtual_memory_bytes", vm * 1024)
+        }
+        let rss = status_kb(status, "VmRSS:")
+        if rss >= 0 {
+            write_help_type(out, "process_resident_memory_bytes", "Resident memory size in bytes.", "gauge")
+            write_plain(out, "process_resident_memory_bytes", rss * 1024)
+        }
+        let fds = open_fds()
+        if fds >= 0 {
+            write_help_type(out, "process_open_fds", "Number of open file descriptors.", "gauge")
+            write_plain(out, "process_open_fds", fds)
+        }
+        let max = max_fds()
+        if max > 0 {
+            write_help_type(out, "process_max_fds", "Maximum number of open file descriptors.", "gauge")
+            write_plain(out, "process_max_fds", max)
+        }
+        #else
+        write_help_type(out, "process_start_time_seconds", "Start time of the process since unix epoch in seconds.", "gauge")
+        write_plain(out, "process_start_time_seconds", program_start_seconds)
+        #end
+    }
+}
+
+class GcMetrics is Collector {
+    fn write_text(out: ByteBuffer) {
+        write_help_type(out, "valk_gc_heap_bytes", "Bytes held by the garbage collected heap of all threads.", "gauge")
+        write_plain(out, "valk_gc_heap_bytes", gc.mem_usage().to(f64))
+        write_help_type(out, "valk_gc_heap_peak_bytes", "The most bytes the garbage collected heap has held.", "gauge")
+        write_plain(out, "valk_gc_heap_peak_bytes", gc.mem_usage_peak.to(f64))
+    }
+}
+
+fn write_plain(out: ByteBuffer, name: String, value: f64) {
+    out.write(name)
+    out.write_byte(' ')
+    write_value(out, value)
+    out.write_byte('\n')
+}
+
+// A `Name:   123 kB` line of /proc/self/status, -1 when missing
+fn status_kb(status: String, name: String) f64 {
+    each status.split("\n") as line {
+        if !line.starts_with(name) : continue
+        let parts = line.range(name.bytes, line.bytes - name.bytes).trim().split(" ")
+        return (parts[0].to_uint() ! return -1).to(f64)
+    }
+    return -1
+}
+
+// The fields of /proc/self/stat after the command name, which may hold spaces:
+// index 0 is field 3, the state
+fn stat_fields(stat: String) Array[String] {
+    let i = stat.bytes
+    while i > 0 {
+        i--
+        if stat[i] == ')' : break
+    }
+    if i + 2 >= stat.bytes : return .{}
+    return stat.range(i + 2, stat.bytes - i - 2).trim().split(" ")
+}
+
+fn boot_time() f64 {
+    let text = fs.read("/proc/stat") !? ""
+    each text.split("\n") as line {
+        if line.starts_with("btime ") : return (line.range(6, line.bytes - 6).trim().to_uint() !? 0).to(f64)
+    }
+    return 0
+}
+
+fn open_fds() f64 {
+    let dir = fs.read_dir("/proc/self/fd") ! return -1
+    let count: uint = 0
+    while true {
+        let name = dir.next() ! break
+        if !isset(name) : break
+        count++
+    }
+    // The directory itself is one of them
+    if count > 0 : count--
+    return count.to(f64)
+}
+
+fn max_fds() f64 {
+    let text = fs.read("/proc/self/limits") !? ""
+    each text.split("\n") as line {
+        if !line.starts_with("Max open files") : continue
+        let parts = line.range(14, line.bytes - 14).trim().split(" ")
+        return (parts[0].to_uint() !? 0).to(f64)
+    }
+    return 0
+}

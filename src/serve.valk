@@ -1,0 +1,97 @@
+use valk.http
+use valk.time
+
+/// The `Content-Type` of the text exposition format.
++ value CONTENT_TYPE ("text/plain; version=0.0.4; charset=utf-8")
+
+/// Returns an HTTP handler that answers with the metrics of `registry`, the default
+/// registry when not given.
+///
+/// ```valk
+/// router.add("GET", "/metrics", metrics.handler())
+/// ```
++ fn handler(registry: ?shared Registry (null)) shared fn(http.Request)(http.Response) {
+    let r = registry ?? default_registry
+    return fn(req: http.Request) http.Response {
+        return http.Response.new(r.text(), 200, CONTENT_TYPE)
+    }
+}
+
+/// Returns a middleware for `http.Server.add_middleware` that counts every request and
+/// times it, by method and status code, and answers `GET <path>` with the metrics.
+///
+/// It registers `http_requests_total`, a counter, and `http_request_duration_seconds`, a
+/// histogram with `buckets` (`DEFAULT_BUCKETS` when not given), both with the labels
+/// `method` and `status`, in `registry` (the default registry when not given). Requests
+/// for `path` are not counted; an empty `path` serves no metrics.
+///
+/// ```valk
+/// server.add_middleware(metrics.middleware())
+/// ```
++ fn middleware(registry: ?shared Registry (null), path: String ("/metrics"), buckets: ?Array[f64] (null)) shared fn(http.Request, shared fn(http.Request)(http.Response))(http.Response) {
+    let r = registry ?? default_registry
+    let requests = r.counter("http_requests_total", "HTTP requests answered, by method and status code.", .{ "method", "status" })
+    let durations = r.histogram("http_request_duration_seconds", "Time spent answering HTTP requests, by method and status code.", .{ "method", "status" }, buckets)
+    let serve: shared String = path
+    return fn(req: http.Request, next: shared fn(http.Request)(http.Response)) http.Response {
+        if serve.bytes > 0 && req.path == serve && (req.method == "GET" || req.method == "HEAD") {
+            return http.Response.new(r.text(), 200, CONTENT_TYPE)
+        }
+        let start = time.mono_ns()
+        let res = next(req)
+        let method = method_label(req.method)
+        let status = status_label(res.status)
+        requests.with(.{ method, status }).inc()
+        durations.with(.{ method, status }).observe_since(start)
+        return res
+    }
+}
+
+// A fixed set, so clients cannot make a series per made-up method
+fn method_label(method: String) String {
+    if method == "GET" : return "GET"
+    if method == "POST" : return "POST"
+    if method == "PUT" : return "PUT"
+    if method == "DELETE" : return "DELETE"
+    if method == "PATCH" : return "PATCH"
+    if method == "HEAD" : return "HEAD"
+    if method == "OPTIONS" : return "OPTIONS"
+    if method == "CONNECT" : return "CONNECT"
+    if method == "TRACE" : return "TRACE"
+    return "other"
+}
+
+// Literals for common codes, so a request does not allocate the text
+fn status_label(status: u16) String {
+    match status {
+        200 => return "200"
+        201 => return "201"
+        202 => return "202"
+        204 => return "204"
+        206 => return "206"
+        301 => return "301"
+        302 => return "302"
+        303 => return "303"
+        304 => return "304"
+        307 => return "307"
+        308 => return "308"
+        400 => return "400"
+        401 => return "401"
+        403 => return "403"
+        404 => return "404"
+        405 => return "405"
+        408 => return "408"
+        409 => return "409"
+        410 => return "410"
+        413 => return "413"
+        415 => return "415"
+        422 => return "422"
+        429 => return "429"
+        500 => return "500"
+        501 => return "501"
+        502 => return "502"
+        503 => return "503"
+        504 => return "504"
+        default => return status.to_string()
+    }
+}

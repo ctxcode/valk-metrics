@@ -1,0 +1,77 @@
+use metrics
+use valk.time
+
+test "Histogram" {
+    let r = metrics.Registry.new()
+    let h = r.histogram("size_bytes", "Sizes.", buckets: .{ 1, 10, 100 })
+    h.observe(0.5)
+    h.observe(1)
+    h.observe(5)
+    h.observe(100)
+    h.observe(1000)
+    assert(h.count() == 5)
+    assert(h.sum() == 1106.5)
+    let expected = "# HELP size_bytes Sizes.
+# TYPE size_bytes histogram
+size_bytes_bucket{le=\"1\"} 2
+size_bytes_bucket{le=\"10\"} 3
+size_bytes_bucket{le=\"100\"} 4
+size_bytes_bucket{le=\"+Inf\"} 5
+size_bytes_sum 1106.5
+size_bytes_count 5
+"
+    assert(r.text() == expected)
+}
+
+test "Histogram with labels" {
+    let r = metrics.Registry.new()
+    let h = r.histogram("job_seconds", "Jobs.", .{ "queue" }, .{ 0.5 })
+    h.with(.{ "mail" }).observe(0.25)
+    h.with(.{ "mail" }).observe(2)
+    h.with(.{ "sms" }).observe(0.1)
+    let expected = "# HELP job_seconds Jobs.
+# TYPE job_seconds histogram
+job_seconds_bucket{queue=\"mail\",le=\"0.5\"} 1
+job_seconds_bucket{queue=\"mail\",le=\"+Inf\"} 2
+job_seconds_sum{queue=\"mail\"} 2.25
+job_seconds_count{queue=\"mail\"} 2
+job_seconds_bucket{queue=\"sms\",le=\"0.5\"} 1
+job_seconds_bucket{queue=\"sms\",le=\"+Inf\"} 1
+job_seconds_sum{queue=\"sms\"} 0.1
+job_seconds_count{queue=\"sms\"} 1
+"
+    assert(r.text() == expected)
+}
+
+test "Default buckets" {
+    let r = metrics.Registry.new()
+    let h = r.histogram("d_seconds", "D.")
+    h.observe(0.007)
+    h.observe(20)
+    let text = r.text()
+    assert(text.contains("d_seconds_bucket{le=\"0.005\"} 0\n"))
+    assert(text.contains("d_seconds_bucket{le=\"0.01\"} 1\n"))
+    assert(text.contains("d_seconds_bucket{le=\"10\"} 1\n"))
+    assert(text.contains("d_seconds_bucket{le=\"+Inf\"} 2\n"))
+    assert(text.split("_bucket").length == 13)
+}
+
+test "Bucket helpers" {
+    let lin = metrics.linear_buckets(1, 2, 4)
+    assert(lin.length == 4 && lin[0] == 1 && lin[3] == 7)
+    let exp = metrics.exponential_buckets(0.001, 10, 3)
+    assert(exp.length == 3 && exp[2] > 0.0999 && exp[2] < 0.1001)
+    // A trailing +Inf is left out, it is always there
+    let r = metrics.Registry.new()
+    let h = r.histogram("x", "X.", buckets: .{ 1, 1.0 / 0.0 })
+    h.observe(2)
+    assert(r.text().split("_bucket").length == 3)
+}
+
+test "Observe since" {
+    let r = metrics.Registry.new()
+    let h = r.histogram("t_seconds", "T.")
+    h.observe_since(time.mono_ns())
+    assert(h.count() == 1)
+    assert(h.sum() >= 0 && h.sum() < 1)
+}

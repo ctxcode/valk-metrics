@@ -1,0 +1,201 @@
+use valk.io
+
+interface Collector {
+    fn write_text(out: ByteBuffer);
+}
+
+class RegistryData {
+    collectors: Array[shared Collector] (.{})
+    names: Array[String] (.{})
+}
+
+/// The registry that `metrics.counter`, `metrics.gauge`, `metrics.histogram` and the
+/// other module functions use.
++ shared default_registry: Registry (new_registry())
+
+/// A set of metrics that are written out together.
+///
+/// Most programs use the default registry through the module functions; a registry of
+/// your own keeps a separate set, for example per test. It is safe to use from any
+/// thread. Registering two metrics with the same name panics.
++ class Registry {
+    data: shared Lock[RegistryData]
+
+    /// Creates an empty registry.
+    + static fn new() shared Registry {
+        let r: shared Registry = new_registry()
+        return r
+    }
+
+    /// Registers a counter; with `labels`, one series per combination of their values.
+    + fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) shared Counter {
+        let desc: shared Desc = make_desc(name, help, "counter", labels)
+        let c: shared Counter = Counter { desc: desc, children: labels.length > 0 ? new_children[Counter]() : null }
+        this.add(c, .{ name })
+        return c
+    }
+
+    /// Registers a gauge; with `labels`, one series per combination of their values.
+    + fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) shared Gauge {
+        let desc: shared Desc = make_desc(name, help, "gauge", labels)
+        let g: shared Gauge = Gauge { desc: desc, children: labels.length > 0 ? new_children[Gauge]() : null }
+        this.add(g, .{ name })
+        return g
+    }
+
+    /// Registers a histogram; with `labels`, one series per combination of their values.
+    ///
+    /// `buckets` are the upper bounds in increasing order, without `+Inf`, which is always
+    /// added; `DEFAULT_BUCKETS` when not given. See `linear_buckets` and `exponential_buckets`.
+    + fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) shared Histogram {
+        let d = make_desc(name, help, "histogram", labels)
+        d.bounds = check_buckets(name, buckets ?? DEFAULT_BUCKETS)
+        let count = d.bounds.length + 1
+        let desc: shared Desc = d
+        let h: shared Histogram = Histogram {
+            desc: desc
+            children: labels.length > 0 ? new_children[Histogram]() : null
+            counts: [u64]{ 0 x count }
+        }
+        this.add(h, .{ name })
+        return h
+    }
+
+    /// Registers a gauge whose value `callback` returns each time the metrics are written.
+    ///
+    /// The callback runs on the thread that writes the metrics, while the registry is
+    /// locked: keep it short and do not register metrics in it.
+    + fn gauge_fn(name: String, help: String, callback: shared fn()(f64)) {
+        let desc: shared Desc = make_desc(name, help, "gauge", Array[String]{})
+        let f: shared FnMetric = FnMetric { desc: desc, callback: callback }
+        this.add(f, .{ name })
+    }
+
+    /// Registers a counter whose value `callback` returns each time the metrics are
+    /// written; the value should never go down.
+    ///
+    /// The callback runs like the one of `gauge_fn`.
+    + fn counter_fn(name: String, help: String, callback: shared fn()(f64)) {
+        let desc: shared Desc = make_desc(name, help, "counter", Array[String]{})
+        let f: shared FnMetric = FnMetric { desc: desc, callback: callback }
+        this.add(f, .{ name })
+    }
+
+    /// Adds the standard process metrics: `process_cpu_seconds_total`,
+    /// `process_start_time_seconds`, and on Linux also `process_resident_memory_bytes`,
+    /// `process_virtual_memory_bytes`, `process_open_fds` and `process_max_fds`.
+    + fn add_process_metrics() {
+        let p: shared ProcessMetrics = ProcessMetrics {}
+        this.add(p, PROCESS_NAMES)
+    }
+
+    /// Adds the memory of valk's garbage collector: `valk_gc_heap_bytes`, the bytes
+    /// held by the heap of all threads, and `valk_gc_heap_peak_bytes`, the most it held.
+    + fn add_gc_metrics() {
+        let g: shared GcMetrics = GcMetrics {}
+        this.add(g, .{ "valk_gc_heap_bytes", "valk_gc_heap_peak_bytes" })
+    }
+
+    fn add(c: shared Collector, names: local &[String]) {
+        lock this.data as d {
+            each names as name {
+                each d.names as n {
+                    if n == name : panic("A metric named " + name + " is already registered")
+                }
+            }
+            each names as name : d.names.append(name)
+            d.collectors.append(c)
+        }
+    }
+
+    /// Writes every metric in the text exposition format 0.0.4.
+    + fn write(out: io.Writer) !io.IoError {
+        let text = this.text()
+        let done: uint = 0
+        while done < text.bytes {
+            let n = out.write(text.view(done)) !>
+            if n == 0 : throw .write
+            done += n
+        }
+    }
+
+    /// Returns every metric in the text exposition format 0.0.4, in the order they were
+    /// registered.
+    + fn text() String {
+        let out = ByteBuffer.new(4096)
+        lock this.data as d {
+            each d.collectors as c {
+                match c {
+                    Counter as m => m.write_text(out)
+                    Gauge as m => m.write_text(out)
+                    Histogram as m => m.write_text(out)
+                    FnMetric as m => m.write_text(out)
+                    ProcessMetrics as m => m.write_text(out)
+                    GcMetrics as m => m.write_text(out)
+                    default => {}
+                }
+            }
+        }
+        return out.to_string()
+    }
+}
+
+fn new_registry() Registry {
+    return Registry { data: .new(RegistryData {}) ! panic("Cannot create a lock") }
+}
+
+fn new_children[T]() shared Lock[Children[T]] {
+    let l: shared Lock[Children[T]] = Lock[Children[T]].new(Children[T] {}) ! panic("Cannot create a lock")
+    return l
+}
+
+class FnMetric is Collector {
+    desc: shared Desc
+    callback: shared fn()(f64)
+
+    fn write_text(out: ByteBuffer) {
+        let value = this.callback()
+        write_header(out, this.desc)
+        write_plain(out, this.desc.name, value)
+    }
+}
+
+/// Registers a counter in the default registry; see `Registry.counter`.
++ fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) shared Counter {
+    return default_registry.counter(name, help, labels)
+}
+
+/// Registers a gauge in the default registry; see `Registry.gauge`.
++ fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) shared Gauge {
+    return default_registry.gauge(name, help, labels)
+}
+
+/// Registers a histogram in the default registry; see `Registry.histogram`.
++ fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) shared Histogram {
+    return default_registry.histogram(name, help, labels, buckets)
+}
+
+/// Registers a callback gauge in the default registry; see `Registry.gauge_fn`.
++ fn gauge_fn(name: String, help: String, callback: shared fn()(f64)) {
+    default_registry.gauge_fn(name, help, callback)
+}
+
+/// Registers a callback counter in the default registry; see `Registry.counter_fn`.
++ fn counter_fn(name: String, help: String, callback: shared fn()(f64)) {
+    default_registry.counter_fn(name, help, callback)
+}
+
+/// Adds the process metrics to the default registry; see `Registry.add_process_metrics`.
++ fn add_process_metrics() {
+    default_registry.add_process_metrics()
+}
+
+/// Adds the GC metrics to the default registry; see `Registry.add_gc_metrics`.
++ fn add_gc_metrics() {
+    default_registry.add_gc_metrics()
+}
+
+/// Returns the metrics of the default registry in the text exposition format 0.0.4.
++ fn text() String {
+    return default_registry.text()
+}

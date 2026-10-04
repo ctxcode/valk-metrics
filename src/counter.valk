@@ -1,0 +1,81 @@
+
+// The series this thread looked up, by label hash and metric
+global counter_cache: HashMap[uint, shared Counter] (.{})
+
+/// A value that only goes up, such as requests served or bytes sent.
+///
+/// Made with `metrics.counter` or `Registry.counter`. All methods are safe to call from
+/// any thread at once. A counter with label names holds one series per combination of
+/// label values: `with` returns it.
+///
+/// ```valk
+/// shared requests: shared metrics.Counter (metrics.counter("app_requests_total", "Requests handled.", .{ "method" }))
+///
+/// requests.with(.{ "GET" }).inc()
+/// ```
++ class Counter is Collector {
+    desc: shared Desc
+    children: ?shared Lock[Children[Counter]] (null)
+    labels: &[String] ([String]{})
+    // Keeps the values that every thread updates off the cache line of the fields above
+    pad: [u64 x 8] (@undefined)
+    ints: u64 (0)
+    floats: f64 (0)
+    pad_after: [u64 x 8] (@undefined)
+
+    /// Adds 1.
+    + fn inc() {
+        if isset(this.children) : no_labels(this.desc)
+        atomic(this.ints + 1)
+    }
+
+    /// Adds `amount`, which may not be negative.
+    + fn add(amount: f64) {
+        if isset(this.children) : no_labels(this.desc)
+        if !(amount >= 0) : panic("A counter cannot decrease: " + this.desc.name)
+        if amount < 9007199254740992.0 {
+            let whole = amount.to(u64)
+            if whole.to(f64) == amount {
+                atomic(this.ints + whole)
+                return
+            }
+        }
+        atomic(this.floats + amount)
+    }
+
+    /// Returns the current value.
+    + fn value() f64 {
+        return this.ints.to(f64) + this.floats
+    }
+
+    /// Returns the series for these label values, one for each label name in order, and
+    /// creates it on first use.
+    ///
+    /// A repeated call does not allocate; keep the result to skip the lookup altogether.
+    /// Panics when the number of values does not match the label names.
+    + fn with(values: local &[String]) shared Counter {
+        return find_child[Counter](counter_cache, this.children, this.desc, values)
+    }
+
+    static fn new_child(desc: shared Desc, labels: &[String]) Counter {
+        return Counter { desc: desc, labels: labels }
+    }
+
+    fn write_text(out: ByteBuffer) {
+        write_header(out, this.desc)
+        let children = this.children
+        if !isset(children) {
+            write_sample(out, this.desc.name, "", this.desc, this.labels, "", "", this.value())
+            return
+        }
+        lock children as c {
+            each c.list as child {
+                write_sample(out, this.desc.name, "", this.desc, child.labels, "", "", child.value())
+            }
+        }
+    }
+}
+
+fn no_labels(desc: shared Desc) {
+    panic("Metric " + desc.name + " has labels, use with() to pick a series")
+}

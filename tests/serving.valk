@@ -1,0 +1,110 @@
+use metrics
+use valk.http
+use valk.time
+use valk.fs
+
+fn page(req: http.Request) http.Response {
+    if req.path == "/missing" : return http.Response.text("no", 404)
+    return http.Response.text("page " + req.path)
+}
+
+test "Middleware counts requests and serves the metrics" {
+    let r = metrics.Registry.new()
+    let server = http.Server.new("127.0.0.1", 19781, page)
+    server.add_middleware(metrics.middleware(r))
+    let running = co server.start(2)
+    time.sleep_ms(20)
+
+    let a = http.get("http://127.0.0.1:19781/a") !!
+    assert(a.body == "page /a")
+    http.get("http://127.0.0.1:19781/b") !!
+    http.get("http://127.0.0.1:19781/missing") !!
+    http.request("BREW", "http://127.0.0.1:19781/pot") !!
+
+    let res = http.get("http://127.0.0.1:19781/metrics") !!
+    assert(res.status == 200)
+    assert((res.headers.get("content-type") !? "") == metrics.CONTENT_TYPE)
+    let text = res.body
+    assert(text.contains("# TYPE http_requests_total counter\n"))
+    assert(text.contains("http_requests_total{method=\"GET\",status=\"200\"} 2\n"))
+    assert(text.contains("http_requests_total{method=\"GET\",status=\"404\"} 1\n"))
+    assert(text.contains("http_requests_total{method=\"other\",status=\"200\"} 1\n"))
+    assert(text.contains("# TYPE http_request_duration_seconds histogram\n"))
+    assert(text.contains("http_request_duration_seconds_count{method=\"GET\",status=\"200\"} 2\n"))
+    assert(text.contains("http_request_duration_seconds_bucket{method=\"GET\",status=\"404\",le=\"+Inf\"} 1\n"))
+    // The scrape itself is not counted
+    assert(!text.contains("/metrics"))
+
+    server.shutdown()
+    await running !!
+}
+
+test "Handler" {
+    let r = metrics.Registry.new()
+    r.counter("served_total", "Served.").inc()
+    let server = http.Server.new("127.0.0.1", 19782, metrics.handler(r))
+    let running = co server.start(1)
+    time.sleep_ms(20)
+
+    let res = http.get("http://127.0.0.1:19782/metrics") !!
+    assert(res.body == "# HELP served_total Served.\n# TYPE served_total counter\nserved_total 1\n")
+    assert((res.headers.get("content-type") !? "") == "text/plain; version=0.0.4; charset=utf-8")
+
+    server.shutdown()
+    await running !!
+}
+
+test "Process and GC metrics" {
+    let r = metrics.Registry.new()
+    r.add_process_metrics()
+    r.add_gc_metrics()
+    let text = r.text()
+    assert(text.contains("# TYPE process_start_time_seconds gauge\n"))
+    assert(text.contains("# TYPE valk_gc_heap_bytes gauge\n"))
+    assert(text.contains("# TYPE valk_gc_heap_peak_bytes gauge\n"))
+    #if OS == "linux"
+    assert(text.contains("# TYPE process_cpu_seconds_total counter\n"))
+    assert(text.contains("process_resident_memory_bytes "))
+    assert(text.contains("process_virtual_memory_bytes "))
+    assert(text.contains("process_open_fds "))
+    assert(text.contains("process_max_fds "))
+    #end
+    let start = line_value(text, "process_start_time_seconds ")
+    let now = time.unix_ns().to(f64) / 1e9
+    assert(start > now - 3600 && start <= now + 1)
+    assert(line_value(text, "valk_gc_heap_bytes ") > 0)
+}
+
+fn line_value(text: String, prefix: String) f64 {
+    each text.split("\n") as line {
+        if line.starts_with(prefix) : return line.range(prefix.bytes, line.bytes - prefix.bytes).to_float() !? -1
+    }
+    return -1
+}
+
+// Every feature of the format in one text, written for tests/check-format.py
+test "Sample for the format check" {
+    let r = metrics.Registry.new()
+    r.counter("plain_total", "A counter.").add(3.25)
+    let c = r.counter("labeled_total", "Help with \\ and\nnewline.", .{ "path", "code" })
+    c.with(.{ "/a \"quoted\"", "200" }).inc()
+    c.with(.{ "back\\slash\nnewline", "500" }).add(2)
+    c.with(.{ "", "日本" }).inc()
+    let g = r.gauge("special_values", "Special values.", .{ "v" })
+    g.with(.{ "nan" }).set(0.0 / 0.0)
+    g.with(.{ "inf" }).set(1.0 / 0.0)
+    g.with(.{ "ninf" }).set(-1.0 / 0.0)
+    g.with(.{ "tiny" }).set(-1.5e-300)
+    g.with(.{ "huge" }).set(1.7e308)
+    let h = r.histogram("latency_seconds", "Latency.", .{ "op" })
+    h.with(.{ "read" }).observe(0.003)
+    h.with(.{ "read" }).observe(0.3)
+    h.with(.{ "write" }).observe(12)
+    r.histogram("sizes", "Sizes.", buckets: metrics.exponential_buckets(1, 10, 4)).observe(50)
+    r.gauge_fn("callback_value", "Callback.", fn() f64 { return 2 })
+    r.add_process_metrics()
+    r.add_gc_metrics()
+    fs.create_dir_all("./tests/tmp") !!
+    fs.write("./tests/tmp/sample.prom", r.text()) !!
+    assert(true)
+}

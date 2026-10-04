@@ -1,0 +1,111 @@
+use metrics
+
+test "Counter" {
+    let r = metrics.Registry.new()
+    let c = r.counter("jobs_total", "Jobs done.")
+    assert(c.value() == 0)
+    c.inc()
+    c.inc()
+    c.add(2.5)
+    c.add(3)
+    assert(c.value() == 7.5)
+    assert(r.text() == "# HELP jobs_total Jobs done.\n# TYPE jobs_total counter\njobs_total 7.5\n")
+}
+
+test "Counter with labels" {
+    let r = metrics.Registry.new()
+    let c = r.counter("requests_total", "Requests.", .{ "method", "code" })
+    c.with(.{ "GET", "200" }).inc()
+    c.with(.{ "GET", "200" }).inc()
+    c.with(.{ "POST", "500" }).add(4)
+    let kept = c.with(.{ "GET", "200" })
+    kept.inc()
+    assert(kept.value() == 3)
+    assert(r.text() == "# HELP requests_total Requests.\n# TYPE requests_total counter\nrequests_total{method=\"GET\",code=\"200\"} 3\nrequests_total{method=\"POST\",code=\"500\"} 4\n")
+}
+
+test "A labeled metric without series" {
+    let r = metrics.Registry.new()
+    r.counter("a_total", "A.", .{ "x" })
+    assert(r.text() == "# HELP a_total A.\n# TYPE a_total counter\n")
+}
+
+test "Many label values" {
+    let r = metrics.Registry.new()
+    let c = r.counter("many_total", "Many.", .{ "id" })
+    each 0..500 as i : c.with(.{ i.to_string() }).add(i.to(f64))
+    let ok = true
+    each 0..500 as i {
+        if c.with(.{ i.to_string() }).value() != i.to(f64) : ok = false
+    }
+    assert(ok)
+}
+
+test "Gauge" {
+    let r = metrics.Registry.new()
+    let g = r.gauge("queue_length", "Items waiting.")
+    g.set(10)
+    g.inc()
+    g.dec()
+    g.dec()
+    g.add(0.5)
+    g.sub(2)
+    assert(g.value() == 7.5)
+    g.set(-3)
+    assert(r.text() == "# HELP queue_length Items waiting.\n# TYPE queue_length gauge\nqueue_length -3\n")
+    g.set_to_current_time()
+    assert(g.value() > 1700000000)
+}
+
+test "Gauge with labels" {
+    let r = metrics.Registry.new()
+    let g = r.gauge("temperature", "Temperature.", .{ "room" })
+    g.with(.{ "kitchen" }).set(21.5)
+    g.with(.{ "hall" }).set(18)
+    g.with(.{ "kitchen" }).inc()
+    assert(g.with(.{ "kitchen" }).value() == 22.5)
+    assert(r.text() == "# HELP temperature Temperature.\n# TYPE temperature gauge\ntemperature{room=\"kitchen\"} 22.5\ntemperature{room=\"hall\"} 18\n")
+}
+
+test "Special values" {
+    let r = metrics.Registry.new()
+    let g = r.gauge("g", "G.", .{ "v" })
+    g.with(.{ "nan" }).set(0.0 / 0.0)
+    g.with(.{ "inf" }).set(1.0 / 0.0)
+    g.with(.{ "ninf" }).set(-1.0 / 0.0)
+    g.with(.{ "big" }).set(1e300)
+    g.with(.{ "small" }).set(0.000000123)
+    assert(r.text() == "# HELP g G.\n# TYPE g gauge\ng{v=\"nan\"} NaN\ng{v=\"inf\"} +Inf\ng{v=\"ninf\"} -Inf\ng{v=\"big\"} 1e300\ng{v=\"small\"} 1.23e-7\n")
+}
+
+test "Escaping" {
+    let r = metrics.Registry.new()
+    let c = r.counter("esc_total", "Back\\slash and\nnewline \"quoted\".", .{ "path" })
+    c.with(.{ "a\\b\"c\nd" }).inc()
+    assert(r.text() == "# HELP esc_total Back\\\\slash and\\nnewline \"quoted\".\n# TYPE esc_total counter\nesc_total{path=\"a\\\\b\\\"c\\nd\"} 1\n")
+}
+
+test "Callback metrics" {
+    let r = metrics.Registry.new()
+    r.gauge_fn("answer", "The answer.", fn() f64 { return 42 })
+    r.counter_fn("ticks_total", "Ticks.", fn() f64 { return 7 })
+    assert(r.text() == "# HELP answer The answer.\n# TYPE answer gauge\nanswer 42\n# HELP ticks_total Ticks.\n# TYPE ticks_total counter\nticks_total 7\n")
+}
+
+test "Registration order" {
+    let r = metrics.Registry.new()
+    r.gauge("b", "B.").set(1)
+    r.counter("a_total", "A.").inc()
+    assert(r.text() == "# HELP b B.\n# TYPE b gauge\nb 1\n# HELP a_total A.\n# TYPE a_total counter\na_total 1\n")
+}
+
+test "Write to a writer" {
+    let r = metrics.Registry.new()
+    r.counter("w_total", "W.").inc()
+    let buf = ByteBuffer.new()
+    r.write(buf) ! {
+        assert(false)
+        return
+    }
+    assert(buf.to_string() == r.text())
+}

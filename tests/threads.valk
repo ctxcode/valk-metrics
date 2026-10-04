@@ -1,0 +1,55 @@
+use metrics
+use valk.thread
+use valk.gc
+
+test "Updates from several threads" {
+    let r = metrics.Registry.new()
+    let c = r.counter("t_total", "T.")
+    let f = r.counter("f_total", "F.")
+    let g = r.gauge("t_gauge", "T.")
+    let h = r.histogram("t_hist", "T.", buckets: .{ 1, 2 })
+    let l = r.counter("l_total", "L.", .{ "worker", "kind" })
+    let threads = Array[thread.Thread[void]].new()
+    each 0..4 as i {
+        threads.append(thread.start(fn() {
+            let names: [String x 4] = .{ "a", "b", "c", "d" }
+            each 0..20000 as j {
+                c.inc()
+                f.add(0.5)
+                g.inc()
+                g.dec()
+                g.add(1)
+                h.observe((j % 3).to(f64))
+                // Every thread creates and looks up the same series
+                l.with(.{ names[j % 4], "x" }).inc()
+            }
+        }) !!)
+    }
+    each threads as t : t.await()
+    assert(c.value() == 80000)
+    assert(f.value() == 40000)
+    assert(g.value() == 80000)
+    assert(h.count() == 80000)
+    assert(h.sum() == 4.0 * (6667 * 1 + 6666 * 2))
+    assert(l.with(.{ "a", "x" }).value() == 20000)
+    assert(l.with(.{ "d", "x" }).value() == 20000)
+    let text = r.text()
+    assert(text.contains("t_hist_bucket{le=\"1\"} 53336\n"))
+    assert(text.split("l_total{").length == 5)
+}
+
+test "Repeated lookups do not allocate" {
+    let r = metrics.Registry.new()
+    let c = r.counter("alloc_total", "A.", .{ "method", "status" })
+    let h = r.histogram("alloc_seconds", "A.", .{ "method" })
+    c.with(.{ "GET", "200" }).inc()
+    h.with(.{ "GET" }).observe(1)
+    // Bytes this thread allocated since its last collection
+    let before = gc.gc.mem_new
+    each 0..200000 as i {
+        c.with(.{ "GET", "200" }).inc()
+        h.with(.{ "GET" }).observe(1)
+    }
+    assert(gc.gc.mem_new == before)
+    assert(c.with(.{ "GET", "200" }).value() == 200001)
+}

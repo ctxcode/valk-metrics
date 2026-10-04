@@ -1,0 +1,67 @@
+
+// The text exposition format, version 0.0.4
+
+fn write_header(out: ByteBuffer, desc: shared Desc) {
+    write_help_type(out, desc.name, desc.help, desc.kind)
+}
+
+fn write_help_type(out: ByteBuffer, name: String, help: String, kind: String) {
+    out.write("# HELP ")
+    out.write(name)
+    out.write_byte(' ')
+    each help.view() as ch {
+        if ch == '\\' : out.write("\\\\")
+        else if ch == '\n' : out.write("\\n")
+        else : out.write_byte(ch)
+    }
+    out.write("\n# TYPE ")
+    out.write(name)
+    out.write_byte(' ')
+    out.write(kind)
+    out.write_byte('\n')
+}
+
+// One line: `name_suffix{labels,extra="value"} 1`
+fn write_sample(out: ByteBuffer, name: String, suffix: String, desc: shared Desc, values: local &[String], extra_name: String, extra_value: String, value: f64) {
+    out.write(name)
+    out.write(suffix)
+    if values.length > 0 || extra_name.bytes > 0 {
+        out.write_byte('{')
+        each values as v, i {
+            if i > 0 : out.write_byte(',')
+            write_label(out, desc.label_names[i], v)
+        }
+        if extra_name.bytes > 0 {
+            if values.length > 0 : out.write_byte(',')
+            write_label(out, extra_name, extra_value)
+        }
+        out.write_byte('}')
+    }
+    out.write_byte(' ')
+    write_value(out, value)
+    out.write_byte('\n')
+}
+
+fn write_label(out: ByteBuffer, name: String, value: String) {
+    out.write(name)
+    out.write("=\"")
+    each value.view() as ch {
+        if ch == '\\' : out.write("\\\\")
+        else if ch == '"' : out.write("\\\"")
+        else if ch == '\n' : out.write("\\n")
+        else : out.write_byte(ch)
+    }
+    out.write_byte('"')
+}
+
+fn write_value(out: ByteBuffer, value: f64) {
+    if value != value : out.write("NaN")
+    else if value.is_infinite() : out.write(value > 0 ? "+Inf" : "-Inf")
+    else : out.write_f64_ascii_shortest(value)
+}
+
+fn float_text(value: f64) String {
+    let out = ByteBuffer.new(24)
+    write_value(out, value)
+    return out.to_string()
+}

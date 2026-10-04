@@ -1,0 +1,134 @@
+use valk.time
+
+/// The bucket bounds a histogram gets when none are given, in seconds: from 5 ms to 10 s,
+/// the same as the official Prometheus clients.
++ value DEFAULT_BUCKETS (.{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 })
+
+// The series this thread looked up, by label hash and metric
+global histogram_cache: HashMap[uint, shared Histogram] (.{})
+
+/// Counts observations, such as request durations or response sizes, in buckets.
+///
+/// Made with `metrics.histogram` or `Registry.histogram`. The output has a cumulative
+/// `_bucket` series per upper bound plus `+Inf`, and `_sum` and `_count`. All methods are
+/// safe to call from any thread at once. A histogram with label names holds one series
+/// per combination of label values: `with` returns it.
+///
+/// ```valk
+/// shared latency: shared metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job."))
+///
+/// let start = time.mono_ns()
+/// run_job()
+/// latency.observe_since(start)
+/// ```
++ class Histogram is Collector {
+    desc: shared Desc
+    children: ?shared Lock[Children[Histogram]] (null)
+    labels: &[String] ([String]{})
+    // Keeps the values that every thread updates off the cache line of the fields above
+    pad: [u64 x 8] (@undefined)
+    // One count per bound and one for +Inf, not cumulative
+    counts: mut &[u64]
+    total: f64 (0)
+    pad_after: [u64 x 8] (@undefined)
+
+    /// Records one observation.
+    + fn observe(value: f64) {
+        if isset(this.children) : no_labels(this.desc)
+        let bounds = this.desc.bounds
+        let lo: uint = 0
+        let hi = bounds.length
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if value <= bounds[mid] : hi = mid
+            else : lo = mid + 1
+        }
+        atomic(this.counts[lo] + 1)
+        atomic(this.total + value)
+    }
+
+    /// Records the seconds since `start_ns`, a reading of `time.mono_ns()`.
+    + fn observe_since(start_ns: uint) {
+        this.observe((time.mono_ns() - start_ns).to(f64) / 1e9)
+    }
+
+    /// Returns the number of observations.
+    + fn count() u64 {
+        let n: u64 = 0
+        each this.counts as c : n += c
+        return n
+    }
+
+    /// Returns the sum of all observations.
+    + fn sum() f64 {
+        return this.total
+    }
+
+    /// Returns the series for these label values, one for each label name in order, and
+    /// creates it on first use.
+    ///
+    /// A repeated call does not allocate; keep the result to skip the lookup altogether.
+    /// Panics when the number of values does not match the label names.
+    + fn with(values: local &[String]) shared Histogram {
+        return find_child[Histogram](histogram_cache, this.children, this.desc, values)
+    }
+
+    static fn new_child(desc: shared Desc, labels: &[String]) Histogram {
+        return Histogram { desc: desc, labels: labels, counts: [u64]{ 0 x desc.bounds.length + 1 } }
+    }
+
+    fn write_text(out: ByteBuffer) {
+        write_header(out, this.desc)
+        let children = this.children
+        if !isset(children) {
+            this.write_series(out)
+            return
+        }
+        lock children as c {
+            each c.list as child : child.write_series(out)
+        }
+    }
+
+    fn write_series(out: ByteBuffer) {
+        let desc = this.desc
+        let bounds = desc.bounds
+        let n: u64 = 0
+        each this.counts as count, i {
+            n += count
+            let le = i < bounds.length ? float_text(bounds[i]) : "+Inf"
+            write_sample(out, desc.name, "_bucket", desc, this.labels, "le", le, n.to(f64))
+        }
+        write_sample(out, desc.name, "_sum", desc, this.labels, "", "", this.total)
+        write_sample(out, desc.name, "_count", desc, this.labels, "", "", n.to(f64))
+    }
+}
+
+fn check_buckets(name: String, buckets: local &[f64]) Array[f64] {
+    let list = Array[f64].new(buckets.length)
+    each buckets as b, i {
+        if b != b : panic("A bucket bound of " + name + " is NaN")
+        if i > 0 && b <= buckets[i - 1] : panic("The bucket bounds of " + name + " must increase")
+        // +Inf is always there
+        if b.is_infinite() && b > 0 : break
+        list.append(b)
+    }
+    return list
+}
+
+/// Returns `count` bucket bounds: `start`, `start + width`, `start + 2 * width`, ...
++ fn linear_buckets(start: f64, width: f64, count: uint) Array[f64] {
+    let list = Array[f64].new(count)
+    each 0..count as i : list.append(start + width * i.to(f64))
+    return list
+}
+
+/// Returns `count` bucket bounds: `start`, `start * factor`, `start * factor^2`, ...
++ fn exponential_buckets(start: f64, factor: f64, count: uint) Array[f64] {
+    let list = Array[f64].new(count)
+    let b = start
+    each 0..count as i {
+        list.append(b)
+        b *= factor
+    }
+    return list
+}

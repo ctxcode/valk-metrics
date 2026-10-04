@@ -1,0 +1,105 @@
+
+// What all series of one metric share
+class Desc {
+    name: String
+    help: String
+    kind: String
+    label_names: Array[String]
+    id: uint (atomic(next_desc_id + 1))
+    // Histograms: the upper bounds, without +Inf
+    bounds: Array[f64] (.{})
+}
+
+// The labeled series of one metric, by the hash of their label values
+class Children[T] {
+    map: HashMap[uint, shared T] (.{})
+    list: Array[shared T] (.{})
+}
+
+shared next_desc_id: uint (0)
+
+// Finds or creates the series for `values`. Each thread keeps the series it used in
+// `cache`, so a repeated lookup takes no lock
+fn find_child[T](cache: HashMap[uint, shared T], children: ?shared Lock[Children[T]], desc: shared Desc, values: local &[String]) shared T {
+    check_label_count(desc, values)
+    let h = labels_hash(values)
+    let key = h ^ (desc.id * 0x9e3779b97f4a7c15)
+    let cached = cache.get(key) !? null
+    if isset(cached) && cached.desc.id == desc.id && labels_equal(cached.labels, values) : return cached
+    let child = locked_child[T](children ?? panic("unreachable"), desc, values, h)
+    cache.set(key, child)
+    return child
+}
+
+fn locked_child[T](children: shared Lock[Children[T]], desc: shared Desc, values: local &[String], h: uint) shared T {
+    lock children as c {
+        while true {
+            let found = c.map.get(h) ! break
+            if labels_equal(found.labels, values) : return found
+            h++
+        }
+        let child: shared T = T.new_child(desc, copy_labels(values))
+        c.map.set(h, child)
+        c.list.append(child)
+        return child
+    }
+}
+
+fn labels_hash(values: local &[String]) uint {
+    let h: uint = 0xcbf29ce484222325
+    each values as v {
+        h = (h ^ v.hash()) * 0x100000001b3
+        h ^= h >> 29
+    }
+    return h
+}
+
+fn labels_equal(a: local &[String], b: local &[String]) bool {
+    if a.length != b.length : return false
+    each b as v, i {
+        let w = a[i]
+        // Usually the same literal
+        if w.data == v.data && w.length == v.length : continue
+        if w != v : return false
+    }
+    return true
+}
+
+fn copy_labels(values: local &[String]) mut &[String] {
+    let list = [String]{ "" x values.length }
+    each values as v, i : list[i] = v
+    return list
+}
+
+fn check_label_count(desc: shared Desc, values: local &[String]) {
+    if desc.label_names.length == 0 : panic("Metric " + desc.name + " has no labels, use it without with()")
+    if values.length != desc.label_names.length : panic("Metric " + desc.name + " takes " + desc.label_names.length + " label values, got " + values.length)
+}
+
+fn make_desc(name: String, help: String, kind: String, labels: local &[String]) Desc {
+    if !valid_name(name, true) : panic("Invalid metric name: '" + name + "'")
+    each labels as label {
+        if !valid_name(label, false) || label.starts_with("__") : panic("Invalid label name '" + label + "' for metric " + name)
+        if kind == "histogram" && label == "le" : panic("A histogram cannot have a label named 'le': " + name)
+    }
+    each labels as label, i {
+        each labels as other, j {
+            if j < i && label == other : panic("Label '" + label + "' given twice for metric " + name)
+        }
+    }
+    let desc = Desc { name: name, help: help, kind: kind, label_names: Array[String].new(labels.length) }
+    each labels as label : desc.label_names.append(label)
+    return desc
+}
+
+// Metric names may hold colons, label names may not
+fn valid_name(name: String, colon: bool) bool {
+    if name.bytes == 0 : return false
+    each name.view() as ch, i {
+        if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' : continue
+        if colon && ch == ':' : continue
+        if i > 0 && ch >= '0' && ch <= '9' : continue
+        return false
+    }
+    return true
+}

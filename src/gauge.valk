@@ -1,0 +1,90 @@
+use valk.time
+
+// The series this thread looked up, by label hash and metric
+global gauge_cache: HashMap[uint, shared Gauge] (.{})
+
+/// A value that goes up and down, such as connections in use or items in a queue.
+///
+/// Made with `metrics.gauge` or `Registry.gauge`. All methods are safe to call from any
+/// thread at once. A gauge with label names holds one series per combination of label
+/// values: `with` returns it.
+///
+/// ```valk
+/// shared queued: shared metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
+///
+/// queued.inc()
+/// queued.dec()
+/// ```
++ class Gauge is Collector {
+    desc: shared Desc
+    children: ?shared Lock[Children[Gauge]] (null)
+    labels: &[String] ([String]{})
+    // Keeps the values that every thread updates off the cache line of the fields above
+    pad: [u64 x 8] (@undefined)
+    current: f64 (0)
+    pad_after: [u64 x 8] (@undefined)
+
+    /// Sets the value.
+    + fn set(value: f64) {
+        if isset(this.children) : no_labels(this.desc)
+        this.current = value
+    }
+
+    /// Adds 1.
+    + fn inc() {
+        this.add(1)
+    }
+
+    /// Subtracts 1.
+    + fn dec() {
+        this.add(-1)
+    }
+
+    /// Adds `amount`, which may be negative.
+    + fn add(amount: f64) {
+        if isset(this.children) : no_labels(this.desc)
+        atomic(this.current + amount)
+    }
+
+    /// Subtracts `amount`.
+    + fn sub(amount: f64) {
+        this.add(-amount)
+    }
+
+    /// Sets the value to the current Unix time in seconds.
+    + fn set_to_current_time() {
+        this.set(time.unix_ns().to(f64) / 1e9)
+    }
+
+    /// Returns the current value.
+    + fn value() f64 {
+        return this.current
+    }
+
+    /// Returns the series for these label values, one for each label name in order, and
+    /// creates it on first use.
+    ///
+    /// A repeated call does not allocate; keep the result to skip the lookup altogether.
+    /// Panics when the number of values does not match the label names.
+    + fn with(values: local &[String]) shared Gauge {
+        return find_child[Gauge](gauge_cache, this.children, this.desc, values)
+    }
+
+    static fn new_child(desc: shared Desc, labels: &[String]) Gauge {
+        return Gauge { desc: desc, labels: labels }
+    }
+
+    fn write_text(out: ByteBuffer) {
+        write_header(out, this.desc)
+        let children = this.children
+        if !isset(children) {
+            write_sample(out, this.desc.name, "", this.desc, this.labels, "", "", this.current)
+            return
+        }
+        lock children as c {
+            each c.list as child {
+                write_sample(out, this.desc.name, "", this.desc, child.labels, "", "", child.current)
+            }
+        }
+    }
+}
