@@ -10,7 +10,7 @@ use valk.time
 /// ```valk
 /// router.add("GET", "/metrics", metrics.handler())
 /// ```
-+ fn handler(registry: ?shared Registry (null)) shared fn(http.Request)(http.Response) {
++ fn handler(registry: ?atomic Registry (null)) atomic fn(http.Request)(http.Response) {
     let r = registry ?? default_registry
     return fn(req: http.Request) http.Response {
         return http.Response.new(r.text(), 200, CONTENT_TYPE)
@@ -28,12 +28,12 @@ use valk.time
 /// ```valk
 /// server.add_middleware(metrics.middleware())
 /// ```
-+ fn middleware(registry: ?shared Registry (null), path: String ("/metrics"), buckets: ?Array[f64] (null)) shared fn(http.Request, shared fn(http.Request)(http.Response))(http.Response) {
++ fn middleware(registry: ?atomic Registry (null), path: String ("/metrics"), buckets: ?Array[f64] (null)) atomic fn(http.Request, atomic fn(http.Request)(http.Response))(http.Response) {
     let r = registry ?? default_registry
     let requests = r.counter("http_requests_total", "HTTP requests answered, by method and status code.", .{ "method", "status" })
     let durations = r.histogram("http_request_duration_seconds", "Time spent answering HTTP requests, by method and status code.", .{ "method", "status" }, buckets)
-    let serve: shared String = path
-    return fn(req: http.Request, next: shared fn(http.Request)(http.Response)) http.Response {
+    let serve: atomic String = path
+    return fn(req: http.Request, next: atomic fn(http.Request)(http.Response)) http.Response {
         if serve.bytes > 0 && req.path == serve && (req.method == "GET" || req.method == "HEAD") {
             return http.Response.new(r.text(), 200, CONTENT_TYPE)
         }

@@ -1,6 +1,6 @@
 
 // The series this thread looked up, by label hash and metric
-global counter_cache: HashMap[uint, shared Counter] (.{})
+global counter_cache: HashMap[uint, atomic Counter] (.{})
 
 /// A value that only goes up, such as requests served or bytes sent.
 ///
@@ -14,8 +14,8 @@ global counter_cache: HashMap[uint, shared Counter] (.{})
 /// requests.with(.{ "GET" }).inc()
 /// ```
 + class Counter is Collector {
-    desc: shared Desc
-    children: ?shared Lock[Children[Counter]] (null)
+    desc: atomic Desc
+    children: ?atomic Lock[Children[Counter]] (null)
     labels: &[String] ([String]{})
     // Keeps the values that every thread updates off the cache line of the fields above
     pad: [u64 x 8] (@undefined)
@@ -53,11 +53,11 @@ global counter_cache: HashMap[uint, shared Counter] (.{})
     ///
     /// A repeated call does not allocate; keep the result to skip the lookup altogether.
     /// Panics when the number of values does not match the label names.
-    + fn with(values: local &[String]) shared Counter {
+    + fn with(values: local &[String]) atomic Counter {
         return find_child[Counter](counter_cache, this.children, this.desc, values)
     }
 
-    static fn new_child(desc: shared Desc, labels: &[String]) Counter {
+    static fn new_child(desc: atomic Desc, labels: &[String]) Counter {
         return Counter { desc: desc, labels: labels }
     }
 
@@ -76,6 +76,6 @@ global counter_cache: HashMap[uint, shared Counter] (.{})
     }
 }
 
-fn no_labels(desc: shared Desc) {
+fn no_labels(desc: atomic Desc) {
     panic("Metric " + desc.name + " has labels, use with() to pick a series")
 }

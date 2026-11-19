@@ -14,15 +14,15 @@ class Desc {
 
 // The labeled series of one metric, by the hash of their label values
 class Children[T] {
-    map: HashMap[uint, shared T] (.{})
-    list: Array[shared T] (.{})
+    map: HashMap[uint, atomic T] (.{})
+    list: Array[atomic T] (.{})
 }
 
 shared next_desc_id: uint (0)
 
 // Finds or creates the series for `values`. Each thread keeps the series it used in
 // `cache`, so a repeated lookup takes no lock
-fn find_child[T](cache: HashMap[uint, shared T], children: ?shared Lock[Children[T]], desc: shared Desc, values: local &[String]) shared T {
+fn find_child[T](cache: HashMap[uint, atomic T], children: ?atomic Lock[Children[T]], desc: atomic Desc, values: local &[String]) atomic T {
     check_label_count(desc, values)
     let h = labels_hash(values)
     let key = h ^ (desc.id * 0x9e3779b97f4a7c15)
@@ -33,14 +33,14 @@ fn find_child[T](cache: HashMap[uint, shared T], children: ?shared Lock[Children
     return child
 }
 
-fn locked_child[T](children: shared Lock[Children[T]], desc: shared Desc, values: local &[String], h: uint) shared T {
+fn locked_child[T](children: atomic Lock[Children[T]], desc: atomic Desc, values: local &[String], h: uint) atomic T {
     lock children as c {
         while true {
             let found = c.map.get(h) ! break
             if labels_equal(found.labels, values) : return found
             h++
         }
-        let child: shared T = T.new_child(desc, copy_labels(values))
+        let child: atomic T = T.new_child(desc, copy_labels(values))
         c.map.set(h, child)
         c.list.append(child)
         return child
@@ -73,7 +73,7 @@ fn copy_labels(values: local &[String]) mut &[String] {
     return list
 }
 
-fn check_label_count(desc: shared Desc, values: local &[String]) {
+fn check_label_count(desc: atomic Desc, values: local &[String]) {
     if desc.label_names.length == 0 : panic("Metric " + desc.name + " has no labels, use it without with()")
     if values.length != desc.label_names.length : panic("Metric " + desc.name + " takes " + desc.label_names.length + " label values, got " + values.length)
 }

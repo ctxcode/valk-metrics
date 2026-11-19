@@ -2,9 +2,9 @@ use metrics
 use valk.http
 use valk.time
 
-shared jobs: shared metrics.Counter (metrics.counter("app_jobs_total", "Jobs handled, by queue.", .{ "queue" }))
-shared queued: shared metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
-shared job_seconds: shared metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job.", buckets: metrics.exponential_buckets(0.001, 4, 6)))
+shared jobs: atomic metrics.Counter (metrics.counter("app_jobs_total", "Jobs handled, by queue.", .{ "queue" }))
+shared queued: atomic metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
+shared job_seconds: atomic metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job.", buckets: metrics.exponential_buckets(0.001, 4, 6)))
 
 fn handler(req: http.Request) http.Response {
     let start = time.mono_ns()

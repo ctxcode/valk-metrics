@@ -1,7 +1,7 @@
 
 // The text exposition format, version 0.0.4
 
-fn write_header(out: ByteBuffer, desc: shared Desc) {
+fn write_header(out: ByteBuffer, desc: atomic Desc) {
     write_help_type(out, desc.name, desc.help, desc.kind)
 }
 
@@ -22,7 +22,7 @@ fn write_help_type(out: ByteBuffer, name: String, help: String, kind: String) {
 }
 
 // One line: `name_suffix{labels,extra="value"} 1`
-fn write_sample(out: ByteBuffer, name: String, suffix: String, desc: shared Desc, values: local &[String], extra_name: String, extra_value: String, value: f64) {
+fn write_sample(out: ByteBuffer, name: String, suffix: String, desc: atomic Desc, values: local &[String], extra_name: String, extra_value: String, value: f64) {
     out.write(name)
     out.write(suffix)
     if values.length > 0 || extra_name.bytes > 0 {

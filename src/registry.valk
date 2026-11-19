@@ -5,7 +5,7 @@ interface Collector {
 }
 
 class RegistryData {
-    collectors: Array[shared Collector] (.{})
+    collectors: Array[atomic Collector] (.{})
     names: Array[String] (.{})
 }
 
@@ -19,26 +19,26 @@ class RegistryData {
 /// your own keeps a separate set, for example per test. It is safe to use from any
 /// thread. Registering two metrics with the same name panics.
 + class Registry {
-    data: shared Lock[RegistryData]
+    data: atomic Lock[RegistryData]
 
     /// Creates an empty registry.
-    + static fn new() shared Registry {
-        let r: shared Registry = new_registry()
+    + static fn new() atomic Registry {
+        let r: atomic Registry = new_registry()
         return r
     }
 
     /// Registers a counter; with `labels`, one series per combination of their values.
-    + fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) shared Counter {
-        let desc: shared Desc = make_desc(name, help, "counter", labels)
-        let c: shared Counter = Counter { desc: desc, children: labels.length > 0 ? new_children[Counter]() : null }
+    + fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) atomic Counter {
+        let desc: atomic Desc = make_desc(name, help, "counter", labels)
+        let c: atomic Counter = Counter { desc: desc, children: labels.length > 0 ? new_children[Counter]() : null }
         this.add(c, .{ name })
         return c
     }
 
     /// Registers a gauge; with `labels`, one series per combination of their values.
-    + fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) shared Gauge {
-        let desc: shared Desc = make_desc(name, help, "gauge", labels)
-        let g: shared Gauge = Gauge { desc: desc, children: labels.length > 0 ? new_children[Gauge]() : null }
+    + fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) atomic Gauge {
+        let desc: atomic Desc = make_desc(name, help, "gauge", labels)
+        let g: atomic Gauge = Gauge { desc: desc, children: labels.length > 0 ? new_children[Gauge]() : null }
         this.add(g, .{ name })
         return g
     }
@@ -47,13 +47,13 @@ class RegistryData {
     ///
     /// `buckets` are the upper bounds in increasing order, without `+Inf`, which is always
     /// added; `DEFAULT_BUCKETS` when not given. See `linear_buckets` and `exponential_buckets`.
-    + fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) shared Histogram {
+    + fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) atomic Histogram {
         let d = make_desc(name, help, "histogram", labels)
         d.bounds = check_buckets(name, buckets ?? DEFAULT_BUCKETS)
         each d.bounds as b : d.bound_texts.append(float_text(b))
         let count = d.bounds.length + 1
-        let desc: shared Desc = d
-        let h: shared Histogram = Histogram {
+        let desc: atomic Desc = d
+        let h: atomic Histogram = Histogram {
             desc: desc
             children: labels.length > 0 ? new_children[Histogram]() : null
             counts: [u64]{ 0 x count }
@@ -66,9 +66,9 @@ class RegistryData {
     ///
     /// The callback runs on the thread that writes the metrics, while the registry is
     /// locked: keep it short and do not register metrics in it.
-    + fn gauge_fn(name: String, help: String, callback: shared fn()(f64)) {
-        let desc: shared Desc = make_desc(name, help, "gauge", Array[String]{})
-        let f: shared FnMetric = FnMetric { desc: desc, callback: callback }
+    + fn gauge_fn(name: String, help: String, callback: atomic fn()(f64)) {
+        let desc: atomic Desc = make_desc(name, help, "gauge", Array[String]{})
+        let f: atomic FnMetric = FnMetric { desc: desc, callback: callback }
         this.add(f, .{ name })
     }
 
@@ -76,9 +76,9 @@ class RegistryData {
     /// written; the value should never go down.
     ///
     /// The callback runs like the one of `gauge_fn`.
-    + fn counter_fn(name: String, help: String, callback: shared fn()(f64)) {
-        let desc: shared Desc = make_desc(name, help, "counter", Array[String]{})
-        let f: shared FnMetric = FnMetric { desc: desc, callback: callback }
+    + fn counter_fn(name: String, help: String, callback: atomic fn()(f64)) {
+        let desc: atomic Desc = make_desc(name, help, "counter", Array[String]{})
+        let f: atomic FnMetric = FnMetric { desc: desc, callback: callback }
         this.add(f, .{ name })
     }
 
@@ -86,18 +86,18 @@ class RegistryData {
     /// `process_start_time_seconds`, and on Linux also `process_resident_memory_bytes`,
     /// `process_virtual_memory_bytes`, `process_open_fds` and `process_max_fds`.
     + fn add_process_metrics() {
-        let p: shared ProcessMetrics = ProcessMetrics {}
+        let p: atomic ProcessMetrics = ProcessMetrics {}
         this.add(p, PROCESS_NAMES)
     }
 
     /// Adds the memory of valk's garbage collector: `valk_gc_heap_bytes`, the bytes
     /// held by the heap of all threads, and `valk_gc_heap_peak_bytes`, the most it held.
     + fn add_gc_metrics() {
-        let g: shared GcMetrics = GcMetrics {}
+        let g: atomic GcMetrics = GcMetrics {}
         this.add(g, .{ "valk_gc_heap_bytes", "valk_gc_heap_peak_bytes" })
     }
 
-    fn add(c: shared Collector, names: local &[String]) {
+    fn add(c: atomic Collector, names: local &[String]) {
         lock this.data as d {
             each names as name {
                 each d.names as n {
@@ -145,14 +145,14 @@ fn new_registry() Registry {
     return Registry { data: .new(RegistryData {}) ! panic("Cannot create a lock") }
 }
 
-fn new_children[T]() shared Lock[Children[T]] {
-    let l: shared Lock[Children[T]] = Lock[Children[T]].new(Children[T] {}) ! panic("Cannot create a lock")
+fn new_children[T]() atomic Lock[Children[T]] {
+    let l: atomic Lock[Children[T]] = Lock[Children[T]].new(Children[T] {}) ! panic("Cannot create a lock")
     return l
 }
 
 class FnMetric is Collector {
-    desc: shared Desc
-    callback: shared fn()(f64)
+    desc: atomic Desc
+    callback: atomic fn()(f64)
 
     fn write_text(out: ByteBuffer) {
         let value = this.callback()
@@ -162,27 +162,27 @@ class FnMetric is Collector {
 }
 
 /// Registers a counter in the default registry; see `Registry.counter`.
-+ fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) shared Counter {
++ fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) atomic Counter {
     return default_registry.counter(name, help, labels)
 }
 
 /// Registers a gauge in the default registry; see `Registry.gauge`.
-+ fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) shared Gauge {
++ fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) atomic Gauge {
     return default_registry.gauge(name, help, labels)
 }
 
 /// Registers a histogram in the default registry; see `Registry.histogram`.
-+ fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) shared Histogram {
++ fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) atomic Histogram {
     return default_registry.histogram(name, help, labels, buckets)
 }
 
 /// Registers a callback gauge in the default registry; see `Registry.gauge_fn`.
-+ fn gauge_fn(name: String, help: String, callback: shared fn()(f64)) {
++ fn gauge_fn(name: String, help: String, callback: atomic fn()(f64)) {
     default_registry.gauge_fn(name, help, callback)
 }
 
 /// Registers a callback counter in the default registry; see `Registry.counter_fn`.
-+ fn counter_fn(name: String, help: String, callback: shared fn()(f64)) {
++ fn counter_fn(name: String, help: String, callback: atomic fn()(f64)) {
     default_registry.counter_fn(name, help, callback)
 }
 

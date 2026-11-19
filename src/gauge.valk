@@ -1,7 +1,7 @@
 use valk.time
 
 // The series this thread looked up, by label hash and metric
-global gauge_cache: HashMap[uint, shared Gauge] (.{})
+global gauge_cache: HashMap[uint, atomic Gauge] (.{})
 
 /// A value that goes up and down, such as connections in use or items in a queue.
 ///
@@ -16,8 +16,8 @@ global gauge_cache: HashMap[uint, shared Gauge] (.{})
 /// queued.dec()
 /// ```
 + class Gauge is Collector {
-    desc: shared Desc
-    children: ?shared Lock[Children[Gauge]] (null)
+    desc: atomic Desc
+    children: ?atomic Lock[Children[Gauge]] (null)
     labels: &[String] ([String]{})
     // Keeps the values that every thread updates off the cache line of the fields above
     pad: [u64 x 8] (@undefined)
@@ -66,11 +66,11 @@ global gauge_cache: HashMap[uint, shared Gauge] (.{})
     ///
     /// A repeated call does not allocate; keep the result to skip the lookup altogether.
     /// Panics when the number of values does not match the label names.
-    + fn with(values: local &[String]) shared Gauge {
+    + fn with(values: local &[String]) atomic Gauge {
         return find_child[Gauge](gauge_cache, this.children, this.desc, values)
     }
 
-    static fn new_child(desc: shared Desc, labels: &[String]) Gauge {
+    static fn new_child(desc: atomic Desc, labels: &[String]) Gauge {
         return Gauge { desc: desc, labels: labels }
     }
 

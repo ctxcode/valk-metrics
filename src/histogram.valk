@@ -5,7 +5,7 @@ use valk.time
 + value DEFAULT_BUCKETS (.{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 })
 
 // The series this thread looked up, by label hash and metric
-global histogram_cache: HashMap[uint, shared Histogram] (.{})
+global histogram_cache: HashMap[uint, atomic Histogram] (.{})
 
 /// Counts observations, such as request durations or response sizes, in buckets.
 ///
@@ -22,8 +22,8 @@ global histogram_cache: HashMap[uint, shared Histogram] (.{})
 /// latency.observe_since(start)
 /// ```
 + class Histogram is Collector {
-    desc: shared Desc
-    children: ?shared Lock[Children[Histogram]] (null)
+    desc: atomic Desc
+    children: ?atomic Lock[Children[Histogram]] (null)
     labels: &[String] ([String]{})
     // Keeps the values that every thread updates off the cache line of the fields above
     pad: [u64 x 8] (@undefined)
@@ -69,11 +69,11 @@ global histogram_cache: HashMap[uint, shared Histogram] (.{})
     ///
     /// A repeated call does not allocate; keep the result to skip the lookup altogether.
     /// Panics when the number of values does not match the label names.
-    + fn with(values: local &[String]) shared Histogram {
+    + fn with(values: local &[String]) atomic Histogram {
         return find_child[Histogram](histogram_cache, this.children, this.desc, values)
     }
 
-    static fn new_child(desc: shared Desc, labels: &[String]) Histogram {
+    static fn new_child(desc: atomic Desc, labels: &[String]) Histogram {
         return Histogram { desc: desc, labels: labels, counts: [u64]{ 0 x desc.bounds.length + 1 } }
     }
 
