@@ -33,23 +33,23 @@ the same as the official Prometheus clients.
 // Adds the process metrics to the default registry; see `Registry.add_process_metrics`.
 + fn add_process_metrics() void
 // Registers a counter in the default registry; see `Registry.counter`.
-+ fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) shared Counter
++ fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) atomic Counter
 // Registers a callback counter in the default registry; see `Registry.counter_fn`.
-+ fn counter_fn(name: String, help: String, callback: shared fn()(f64)) void
++ fn counter_fn(name: String, help: String, callback: atomic fn()(f64)) void
 // Returns `count` bucket bounds: `start`, `start * factor`, `start * factor^2`, ...
 + fn exponential_buckets(start: f64, factor: f64, count: uint) Array[f64]
 // Registers a gauge in the default registry; see `Registry.gauge`.
-+ fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) shared Gauge
++ fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) atomic Gauge
 // Registers a callback gauge in the default registry; see `Registry.gauge_fn`.
-+ fn gauge_fn(name: String, help: String, callback: shared fn()(f64)) void
++ fn gauge_fn(name: String, help: String, callback: atomic fn()(f64)) void
 // Returns an HTTP handler that answers with the metrics of `registry`, the default registry when not given.
-+ fn handler(registry: ?shared Registry (null)) shared fn(Request)(Response)
++ fn handler(registry: ?atomic Registry (null)) atomic fn(Request)(Response)
 // Registers a histogram in the default registry; see `Registry.histogram`.
-+ fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) shared Histogram
++ fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) atomic Histogram
 // Returns `count` bucket bounds: `start`, `start + width`, `start + 2 * width`, ...
 + fn linear_buckets(start: f64, width: f64, count: uint) Array[f64]
 // Returns a middleware for `http.Server.add_middleware` that counts every request and times it, by method and status code, and answers `GET <path>` with the metrics.
-+ fn middleware(registry: ?shared Registry (null), path: String ("/metrics"), buckets: ?Array[f64] (null)) shared fn(Request, shared fn(Request)(Response))(Response)
++ fn middleware(registry: ?atomic Registry (null), path: String ("/metrics"), buckets: ?Array[f64] (null)) atomic fn(Request, atomic fn(Request)(Response))(Response)
 // Returns the metrics of the default registry in the text exposition format 0.0.4.
 + fn text() String
 ```
@@ -129,7 +129,7 @@ Returns the metrics of the default registry in the text exposition format 0.0.4.
     // Returns the current value.
     + fn value() f64
     // Returns the series for these label values, one for each label name in order, and creates it on first use.
-    + fn with(values: local &[String]) shared Counter
+    + fn with(values: local &[String]) atomic Counter
 }
 ```
 
@@ -142,7 +142,7 @@ any thread at once. A counter with label names holds one series per combination 
 label values: `with` returns it.
 
 ```valk
-shared requests: shared metrics.Counter (metrics.counter("app_requests_total", "Requests handled.", .{ "method" }))
+shared requests: atomic metrics.Counter (metrics.counter("app_requests_total", "Requests handled.", .{ "method" }))
 
 requests.with(.{ "GET" }).inc()
 ```
@@ -185,7 +185,7 @@ Panics when the number of values does not match the label names.
     // Returns the current value.
     + fn value() f64
     // Returns the series for these label values, one for each label name in order, and creates it on first use.
-    + fn with(values: local &[String]) shared Gauge
+    + fn with(values: local &[String]) atomic Gauge
 }
 ```
 
@@ -198,7 +198,7 @@ thread at once. A gauge with label names holds one series per combination of lab
 values: `with` returns it.
 
 ```valk
-shared queued: shared metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
+shared queued: atomic metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
 
 queued.inc()
 queued.dec()
@@ -252,7 +252,7 @@ Panics when the number of values does not match the label names.
     // Returns the sum of all observations.
     + fn sum() f64
     // Returns the series for these label values, one for each label name in order, and creates it on first use.
-    + fn with(values: local &[String]) shared Histogram
+    + fn with(values: local &[String]) atomic Histogram
 }
 ```
 
@@ -266,7 +266,7 @@ safe to call from any thread at once. A histogram with label names holds one ser
 per combination of label values: `with` returns it.
 
 ```valk
-shared latency: shared metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job."))
+shared latency: atomic metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job."))
 
 let start = time.mono_ns()
 run_job()
@@ -305,17 +305,17 @@ Panics when the number of values does not match the label names.
     // Adds the standard process metrics: `process_cpu_seconds_total`, `process_start_time_seconds`, and on Linux also `process_resident_memory_bytes`, `process_virtual_memory_bytes`, `process_open_fds` and `process_max_fds`.
     + fn add_process_metrics() void
     // Registers a counter; with `labels`, one series per combination of their values.
-    + fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) shared Counter
+    + fn counter(name: String, help: String, labels: local &[String] (Array[String]{})) atomic Counter
     // Registers a counter whose value `callback` returns each time the metrics are written; the value should never go down.
-    + fn counter_fn(name: String, help: String, callback: shared fn()(f64)) void
+    + fn counter_fn(name: String, help: String, callback: atomic fn()(f64)) void
     // Registers a gauge; with `labels`, one series per combination of their values.
-    + fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) shared Gauge
+    + fn gauge(name: String, help: String, labels: local &[String] (Array[String]{})) atomic Gauge
     // Registers a gauge whose value `callback` returns each time the metrics are written.
-    + fn gauge_fn(name: String, help: String, callback: shared fn()(f64)) void
+    + fn gauge_fn(name: String, help: String, callback: atomic fn()(f64)) void
     // Registers a histogram; with `labels`, one series per combination of their values.
-    + fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) shared Histogram
+    + fn histogram(name: String, help: String, labels: local &[String] (Array[String]{}), buckets: ?Array[f64] (null)) atomic Histogram
     // Creates an empty registry.
-    + static fn new() shared Registry
+    + static fn new() atomic Registry
     // Returns every metric in the text exposition format 0.0.4, in the order they were registered.
     + fn text() String
     // Writes every metric in the text exposition format 0.0.4.

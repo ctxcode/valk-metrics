@@ -10,7 +10,7 @@ global gauge_cache: HashMap[uint, atomic Gauge] (.{})
 /// values: `with` returns it.
 ///
 /// ```valk
-/// shared queued: shared metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
+/// shared queued: atomic metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
 ///
 /// queued.inc()
 /// queued.dec()

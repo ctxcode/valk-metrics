@@ -9,7 +9,7 @@ global counter_cache: HashMap[uint, atomic Counter] (.{})
 /// label values: `with` returns it.
 ///
 /// ```valk
-/// shared requests: shared metrics.Counter (metrics.counter("app_requests_total", "Requests handled.", .{ "method" }))
+/// shared requests: atomic metrics.Counter (metrics.counter("app_requests_total", "Requests handled.", .{ "method" }))
 ///
 /// requests.with(.{ "GET" }).inc()
 /// ```

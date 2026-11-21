@@ -4,7 +4,7 @@ Prometheus metrics for [Valk](https://valk-lang.dev) services: counters, gauges 
 with labels, updated from any thread with atomics, written in the text exposition format 0.0.4.
 Includes an HTTP middleware that counts and times requests, and process and GC metrics.
 
-Requires Valk 0.7.8 or newer.
+Requires Valk 0.9.1 or newer.
 
 ## Install
 
@@ -19,9 +19,9 @@ use metrics
 use valk.http
 use valk.time
 
-shared jobs: shared metrics.Counter (metrics.counter("app_jobs_total", "Jobs handled, by queue.", .{ "queue" }))
-shared queued: shared metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
-shared job_seconds: shared metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job."))
+shared jobs: atomic metrics.Counter (metrics.counter("app_jobs_total", "Jobs handled, by queue.", .{ "queue" }))
+shared queued: atomic metrics.Gauge (metrics.gauge("app_jobs_queued", "Jobs waiting to run."))
+shared job_seconds: atomic metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job."))
 
 fn handler(req: http.Request) http.Response {
     let start = time.mono_ns()
@@ -62,7 +62,7 @@ http_request_duration_seconds_bucket{method="GET",status="200",le="0.005"} 1
 ## Metrics
 
 `metrics.counter`, `metrics.gauge` and `metrics.histogram` register a metric in the default
-registry and return it as `shared`, so every thread can use it; keep it in a `shared` global as
+registry and return it as `atomic`, so every thread can use it; keep it in a `shared` global as
 above, or pass it to the code that needs it. A name can be registered once.
 
 | | |

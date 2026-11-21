@@ -15,7 +15,7 @@ global histogram_cache: HashMap[uint, atomic Histogram] (.{})
 /// per combination of label values: `with` returns it.
 ///
 /// ```valk
-/// shared latency: shared metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job."))
+/// shared latency: atomic metrics.Histogram (metrics.histogram("app_job_seconds", "Time spent per job."))
 ///
 /// let start = time.mono_ns()
 /// run_job()

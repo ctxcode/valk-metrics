@@ -10,7 +10,7 @@ fn report(name: String, threads: uint, start: uint) {
     println(name + " threads=" + threads + ": " + (ns / N.to(f64)).to_string(1) + " ns/call, " + (N.to(f64) * threads.to(f64) * 1000 / ns).to_string(0) + "M calls/s")
 }
 
-fn run(name: String, threads: uint, work: shared fn()()) {
+fn run(name: String, threads: uint, work: atomic fn()()) {
     let start = time.mono_ns()
     let list = Array[thread.Thread[void]].new()
     each 0..threads as i : list.append(thread.start(work) !!)
